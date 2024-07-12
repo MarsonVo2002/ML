@@ -16,7 +16,7 @@ import dash_html_components as html
 import plotly.graph_objs as go
 from dash.dependencies import Input, Output, State
 from keras.models import Sequential
-from keras.layers import LSTM, Dropout, Dense, SimpleRNN
+from keras.layers import LSTM, SimpleRNN, GRU, Conv1D, MaxPooling1D, Flatten, Dense
 from sklearn.preprocessing import MinMaxScaler
 import numpy as np
 
@@ -26,24 +26,24 @@ API_KEY = '2SnAaj4wteV16uWiBaSkExvFWGU7M9xEml2ANA34lySiOtxAWzVu1ko4l9nAPR0H'
 API_SECRET = 'YhCo1SBzGOYQC3ZvkgD72L2FPEEQ6OLBhQLnYjsfdkvztsFkj9puWJL2VdJDEent'
 client = Client(API_KEY, API_SECRET)
 app = dash.Dash()
-global stop_flag
-stop_flag = False
 
 # Layout of the dashboard
 app.layout = html.Div(children=[
-    html.H1(children='Real-time BTC-USD Price Dashboard'),
+    html.H1(children='Real-time BTC-USD Price Dashboard', style={"textAlign": "center"}),
     dcc.Dropdown(
         id='model-dropdown',
         options=[
             {'label': 'LSTM', 'value': 'lstm'},
-            {'label': 'RNN', 'value': 'rnn'}
+            {'label': 'RNN', 'value': 'rnn'},
+            {'label': 'GRU', 'value': 'gru'},
+            {'label': 'CNN', 'value': 'cnn'}
         ],
         value='lstm',
-        style={'width': '50%'}
+        style={'width': '50%',"margin": "0 auto"}
     ),
     dcc.Graph(id='price-graph'),
     dcc.Graph(id='roc-graph'),
-    dcc.Interval(id='interval-component', interval=60000, n_intervals=0),
+    dcc.Interval(id='interval-component', interval=70000, n_intervals=0),
     html.Button('Stop Program', id='stop-button', n_clicks=0)
 ])
 
@@ -121,7 +121,7 @@ def update_graph(n, selected_model):
         'layout': go.Layout(
             title='ROC',
             xaxis={'title': 'Time'},
-            yaxis={'title': 'Price'}
+            yaxis={'title': 'BTC-USD Actual vs Predicted ROC'}
         )
     }]
 
@@ -131,13 +131,13 @@ def update_graph(n, selected_model):
     [Input('stop-button', 'n_clicks')]
 )
 def stop_program(n_clicks):
-    global stop_flag
     if n_clicks > 0:
         os._exit(1) # This will forcefully terminate the process
     return n_clicks
 
 def load_and_predict(df, model_type, feature):
     # Loading and processing data
+    print(len(df))
     df["timestamp"] = pd.to_datetime(df.timestamp, format="%Y-%m-%d")
     df.index = df['timestamp']
     data = df.sort_index(ascending=True, axis=0)
@@ -180,14 +180,23 @@ def load_and_predict(df, model_type, feature):
         model.add(SimpleRNN(units=50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
         model.add(SimpleRNN(units=50))
         print("RNN model")
-    
+    elif model_type == 'gru':
+        model.add(GRU(units=50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
+        model.add(GRU(units=50))
+        print("GRU model")
+    elif model_type == 'cnn':
+        model.add(Conv1D(filters=64, kernel_size=3, activation='relu', input_shape=(x_train.shape[1], 1)))
+        model.add(MaxPooling1D(pool_size=2))
+        model.add(Flatten())
+        model.add(Dense(50, activation='relu'))
+        print("CNN model")
+       
     model.add(Dense(1))
-    
     inputs = new_data[len(new_data) - len(valid) - 60:].values
     inputs = inputs.reshape(-1, 1)
     inputs = scaler.transform(inputs)
     
-    model.compile(loss='mean_squared_error', optimizer='adam')
+    model.compile(loss='mean_squared_error', optimizer='adamw')
     model.fit(x_train, y_train, epochs=1, batch_size=1, verbose=1)
     
     X_test = []
@@ -218,10 +227,7 @@ interval = '1m'
 historical_data = fetch_historical_candles(symbol, interval)
 
 async def handle_message(websocket):
-    global stop_flag
     async for message in websocket:
-        if stop_flag:
-            break
         data = json.loads(message)
         kline = data['k']
         new_candle = {
@@ -240,7 +246,6 @@ async def handle_message(websocket):
         }
         global historical_data
         historical_data.loc[len(historical_data)] = new_candle 
-        print("Add new candle")
         time.sleep(15)
 
 async def connect_to_websocket(symbol):
