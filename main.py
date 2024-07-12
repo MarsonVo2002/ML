@@ -42,13 +42,15 @@ app.layout = html.Div(children=[
         style={'width': '50%'}
     ),
     dcc.Graph(id='price-graph'),
-    dcc.Interval(id='interval-component', interval=40000, n_intervals=0),
+    dcc.Graph(id='roc-graph'),
+    dcc.Interval(id='interval-component', interval=60000, n_intervals=0),
     html.Button('Stop Program', id='stop-button', n_clicks=0)
 ])
 
 # Callback to update the graph with predictions
 @app.callback(
     Output('price-graph', 'figure'),
+    Output('roc-graph', 'figure'),
     [Input('interval-component', 'n_intervals'), Input('model-dropdown', 'value')]
 )
 def update_graph(n, selected_model):
@@ -57,14 +59,17 @@ def update_graph(n, selected_model):
     else:
         print(f"Updated: {len(historical_data)}")
     
-    train, valid = load_and_predict(historical_data, selected_model)
-    
+    train, valid = load_and_predict(historical_data, selected_model, True)
+    train_roc, valid_roc = load_and_predict(historical_data, selected_model, False)
+    data = []
+    data1 = []
     trace1 = go.Scatter(
         x=train.index,
         y=train['Close'],
         mode='lines',
         name='Train'
     )
+    data.append(trace1)
 
     trace2 = go.Scatter(
         x=valid.index,
@@ -72,22 +77,53 @@ def update_graph(n, selected_model):
         mode='lines',
         name='Actual'
     )
+    data.append(trace2)
 
+   
     trace3 = go.Scatter(
-        x=valid.index,
-        y=valid['Predictions'],
-        mode='lines',
-        name='Predictions'
-    )
-
-    return {
-        'data': [trace1, trace2, trace3],
+            x=valid.index,
+            y=valid['Predictions_Close'],
+            mode='lines',
+            name='Predictions Close'
+        )
+    data.append(trace3)
+    trace4 = go.Scatter(
+            x=train_roc.index,
+            y=train_roc['roc'],
+            mode='lines',
+            name='Train'
+        )
+    data1.append(trace4)
+    trace5 = go.Scatter(
+            x=valid_roc.index,
+            y=valid_roc['roc'],
+            mode='lines',
+            name='Actual'
+        )
+    data1.append(trace5)
+    trace6 = go.Scatter(
+            x=valid_roc.index,
+            y=valid_roc['Predictions_Close'],
+            mode='lines',
+            name='Predictions Close'
+        )
+    data1.append(trace6)
+    return [{
+        'data': data,
         'layout': go.Layout(
             title='BTC-USD Actual vs Predicted Prices',
             xaxis={'title': 'Time'},
             yaxis={'title': 'Price'}
         )
-    }
+    },
+    {
+        'data': data1,
+        'layout': go.Layout(
+            title='ROC',
+            xaxis={'title': 'Time'},
+            yaxis={'title': 'Price'}
+        )
+    }]
 
 # Callback to stop the program
 @app.callback(
@@ -100,7 +136,8 @@ def stop_program(n_clicks):
         os._exit(1) # This will forcefully terminate the process
     return n_clicks
 
-def load_and_predict(df, model_type):
+def load_and_predict(df, model_type, feature):
+    # Loading and processing data
     df["timestamp"] = pd.to_datetime(df.timestamp, format="%Y-%m-%d")
     df.index = df['timestamp']
     data = df.sort_index(ascending=True, axis=0)
@@ -112,6 +149,11 @@ def load_and_predict(df, model_type):
     
     new_data.index = new_data.Timestamp
     new_data.drop("Timestamp", axis=1, inplace=True)
+    if(feature == False):
+        new_data['roc'] = (new_data['Close'].astype(float).diff(3) / new_data['Close'].astype(float).shift(3)) * 100
+        new_data['roc'] = new_data['roc'].fillna(0)
+        new_data.drop("Close", axis=1, inplace=True)
+        
     dataset = new_data.values
     
     train = dataset[0:int(len(dataset)*0.8), :]
@@ -151,16 +193,13 @@ def load_and_predict(df, model_type):
     X_test = []
     for i in range(60, inputs.shape[0]):
         X_test.append(inputs[i-60:i, 0])
-    
     X_test = np.array(X_test)
     X_test = np.reshape(X_test, (X_test.shape[0], X_test.shape[1], 1))
     closing_price = model.predict(X_test)
     closing_price = scaler.inverse_transform(closing_price)
-    
     train = new_data[:int(len(dataset)*0.8)]
     valid = new_data[int(len(dataset)*0.8):]
-    valid['Predictions'] = closing_price
-    
+    valid['Predictions_Close'] = closing_price
     return train, valid
 
 def fetch_historical_candles(symbol, interval, limit=1000):
